@@ -1,4 +1,4 @@
-# Keyer Iambico y Decodificador CW (LU2FTI) - ESP32-C3 Mini
+# Keyer Iambico y Decodificador CW - ESP32-C3 Mini by LU2FTI
 
 Sistema de manipulador telegrafico iambico (Modos A y B) y decodificador CW en tiempo real con pantalla OLED de 1.3 pulgadas (Controlador SH1106), disenado para el microcontrolador ESP32-C3 Mini.
 
@@ -27,6 +27,25 @@ Sistema de manipulador telegrafico iambico (Modos A y B) y decodificador CW en t
 | `I2C_SDA` | GPIO 5 | Linea SDA para Display OLED SH1106 |
 | `I2C_SCL` | GPIO 4 | Linea SCL para Display OLED SH1106 |
 
+---
+
+## Diagrama de Conexiones y Pinout
+
+```text
+                       +-------------------+
+                       |    ESP32-C3       |
+                       |      Mini         |
+                       |                   |
+  (Paleta DIT)   ----->| GPIO 2            |
+  (Paleta DAH)   ----->| GPIO 3            |
+  (Boton Cmd)    ----->| GPIO 0            |
+                       |                   |
+  (Sidetone Audio)<----| GPIO 1    SDA (5) |-----> [OLED SH1106 SDA]
+  (Key Out TX)    <----| GPIO 6    SCL (4) |-----> [OLED SH1106 SCL]
+                       |                   |
+                       |  GND        3V3   |---> Alimentacion OLED / GND
+                       +-------------------+
+```
 ---
 
 ## Librerias Requeridas
