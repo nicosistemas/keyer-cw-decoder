@@ -1,6 +1,6 @@
 /*
-  KEYER IÁMBICO LU2FTI + DECODIFICADOR CW para ESP32-C3 Mini
-  Por defecto: 20 WPM, Modo Iámbico B, con menú ajustado y sin saltos dobles.
+  KEYER IAMBICO LU2FTI + DECODIFICADOR CW + MODO TRAINER para ESP32-C3 Mini
+  Por defecto: 20 WPM, Modo Iambico B, con menu ajustado y modo trainer lado a lado.
 */
 
 #include <Wire.h>
@@ -8,7 +8,7 @@
 #include <EEPROM.h>
 
 // ==========================================
-//   CONFIGURACIÓN DE PINES
+//   CONFIGURACION DE PINES
 // ==========================================
 #define PIN_DIT         2
 #define PIN_DAH         3
@@ -25,7 +25,7 @@
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 // ==========================================
-//   CONFIGURACIÓN (Por defecto: 20 WPM, Modo B -> false)
+//   CONFIGURACION
 // ==========================================
 struct KeyerSettings {
   uint8_t speedWPM;
@@ -33,13 +33,18 @@ struct KeyerSettings {
   bool swapPaddles;
   bool sidetoneEnabled;
   uint16_t sidetoneFreq;
+  bool trainerEnabled;
 };
 
-KeyerSettings settings = {20, false, false, true, 600};
+KeyerSettings settings = {20, false, false, true, 600, false};
 
-// Variables de control de menú
+// Variables de control de menu y trainer
 bool inMenu = false;
-uint8_t menuOption = 0; // 0: Velocidad, 1: Modo Iámbico
+uint8_t menuOption = 0; // 0: Velocidad, 1: Modo Iambico, 2: Trainer
+bool inTrainerMode = false;
+char targetChar = 'A';
+char currentUserChar = '_';
+char trainerFeedback[30] = "Envie la letra";
 
 // ==========================================
 //   TABLA MORSE
@@ -99,6 +104,8 @@ int caracteresEnPantalla = 0;
 // Declaraciones previas
 void updateDisplay();
 void updateMenuDisplay();
+void updateTrainerDisplay();
+void pickNewTargetChar();
 
 unsigned long getDitDuration() { return 1200UL / settings.speedWPM; }
 unsigned long getDahDuration() { return getDitDuration() * 3; }
@@ -145,6 +152,7 @@ bool isDahPressed() {
 }
 
 void addCharToBuffer(char c) {
+  if (inTrainerMode) return;
   if (bufferFull) {
     textBuffer[bufferEnd] = c;
     bufferEnd = (bufferEnd + 1) % MAX_TEXT_LENGTH;
@@ -171,7 +179,7 @@ void clearBuffer() {
 }
 
 void updateDisplay() {
-  if (inMenu) return;
+  if (inMenu || inTrainerMode) return;
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_6x10_tf);
@@ -218,6 +226,7 @@ void verificarPausaLarga() {
 }
 
 void verificarAutoClear() {
+  if (inTrainerMode) return;
   if (caracteresEnPantalla >= MAX_PANTALLA_CHARS) {
     clearBuffer();
     const char* msg = ">CLEAR<";
@@ -230,6 +239,34 @@ void verificarAutoClear() {
   }
 }
 
+void handleDecodedChar(char c) {
+  if (inTrainerMode) {
+    currentUserChar = c;
+    if (c == targetChar) {
+      sprintf(trainerFeedback, "CORRECTO!");
+      updateTrainerDisplay();
+      if (settings.sidetoneEnabled) {
+        // Tono lindo de acierto (acorde ascendente rapido)
+        tone(PIN_SIDETONE, 1046); delay(70); noTone(PIN_SIDETONE); // Do (C6)
+        delay(20);
+        tone(PIN_SIDETONE, 1318); delay(70); noTone(PIN_SIDETONE); // Mi (E6)
+        delay(20);
+        tone(PIN_SIDETONE, 1568); delay(120); noTone(PIN_SIDETONE); // Sol (G6)
+      }
+      delay(800); // Pausa para que disfrute el acierto
+      pickNewTargetChar();
+    } else {
+      sprintf(trainerFeedback, "Incorrecto, siga intentando");
+      if (settings.sidetoneEnabled) {
+        tone(PIN_SIDETONE, 280); delay(150); noTone(PIN_SIDETONE);
+      }
+      updateTrainerDisplay();
+    }
+  } else {
+    if (c != '\0') addCharToBuffer(c);
+  }
+}
+
 void processDecoder() {
   bool currentKeyState = digitalRead(PIN_KEY_OUT);
   unsigned long now = millis();
@@ -238,7 +275,7 @@ void processDecoder() {
     isKeyDown = true; keyDownStart = now; lastKeyActivityTime = now;
     if (currentLength > 0 && (now - lastChangeTime) > getInterLetterGap()) {
       char c = decodeMorse(currentCode, currentLength);
-      if (c != '\0') addCharToBuffer(c);
+      handleDecodedChar(c);
       currentCode = 0; currentLength = 0;
     }
   } else if (!currentKeyState && isKeyDown) {
@@ -258,10 +295,10 @@ void processDecoder() {
   } else if (!isKeyDown && currentLength > 0) {
     if ((now - lastChangeTime) >= getInterLetterGap()) {
       char c = decodeMorse(currentCode, currentLength);
-      if (c != '\0') addCharToBuffer(c);
+      handleDecodedChar(c);
       currentCode = 0; currentLength = 0; lastChangeTime = now;
     }
-    if ((now - lastChangeTime) >= getInterWordGap()) {
+    if (!inTrainerMode && (now - lastChangeTime) >= getInterWordGap()) {
       if (bufferEnd == 0 || textBuffer[(bufferEnd - 1 + MAX_TEXT_LENGTH) % MAX_TEXT_LENGTH] != ' ') {
         addSpaceToBuffer();
       }
@@ -289,7 +326,7 @@ void stopTransmit() {
 }
 
 // ==========================================
-//   MOTOR IAMBICO PRECISO
+//   MOTOR IAMBICO
 // ==========================================
 void processKeyer() {
   unsigned long now = millis();
@@ -374,48 +411,80 @@ void processKeyer() {
 }
 
 // ==========================================
-//   GESTIÓN DEL MENÚ INTERACTIVO (Con Cooldown)
+//   GESTION DEL MENU Y TRAINER
 // ==========================================
+void pickNewTargetChar() {
+  int idx = random(0, 26); // Letras de A a Z
+  MorseChar mc;
+  memcpy_P(&mc, &morseTable[idx], sizeof(mc));
+  targetChar = mc.character;
+  currentUserChar = '_';
+  sprintf(trainerFeedback, "Envie la letra");
+  updateTrainerDisplay();
+}
+
+void updateTrainerDisplay() {
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_5x7_tf);
+    u8g2.drawStr(12, 8, "OBJETIVO          ESCRITO");
+
+    // Letras gigantes lado a lado
+    u8g2.setFont(u8g2_font_ncenB24_tf);
+    
+    char targetStr[2] = {targetChar, '\0'};
+    char userStr[2] = {currentUserChar, '\0'};
+
+    u8g2.drawStr(22, 43, targetStr);
+    u8g2.drawStr(90, 43, userStr);
+
+    u8g2.setFont(u8g2_font_5x7_tf);
+    u8g2.drawStr(0, 62, trainerFeedback);
+  } while (u8g2.nextPage());
+}
+
 void updateMenuDisplay() {
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_ncenB08_tf);
-    u8g2.drawStr(0, 12, "-- MENU KEYER --");
+    u8g2.drawStr(0, 10, "-- MENU CONFIG --");
     u8g2.setFont(u8g2_font_6x10_tf);
     
-    char line1[30], line2[30];
-    if (menuOption == 0) {
-      sprintf(line1, "> 1. Vel: %d WPM", settings.speedWPM);
-      sprintf(line2, "  2. Modo: %s", settings.iambicModeA ? "IAM-A" : "IAM-B");
-    } else {
-      sprintf(line1, "  1. Vel: %d WPM", settings.speedWPM);
-      sprintf(line2, "> 2. Modo: %s", settings.iambicModeA ? "IAM-A" : "IAM-B");
-    }
-    u8g2.drawStr(0, 32, line1);
-    u8g2.drawStr(0, 48, line2);
+    char line1[30], line2[30], line3[30];
+    sprintf(line1, "%s 1. Vel: %d WPM", menuOption == 0 ? ">" : " ", settings.speedWPM);
+    sprintf(line2, "%s 2. Modo: %s", menuOption == 1 ? ">" : " ", settings.iambicModeA ? "IAM-A" : "IAM-B");
+    sprintf(line3, "%s 3. Trainer: %s", menuOption == 2 ? ">" : " ", settings.trainerEnabled ? "ON" : "OFF");
+    
+    u8g2.drawStr(0, 24, line1);
+    u8g2.drawStr(0, 38, line2);
+    u8g2.drawStr(0, 52, line3);
+    
     u8g2.setFont(u8g2_font_5x7_tf);
-    u8g2.drawStr(0, 62, "Punto-/Raya+/Boton:Sig");
+    u8g2.drawStr(0, 62, "-/+ Cambiar | Boton: Sig");
   } while (u8g2.nextPage());
 }
 
 void processMenu() {
   static unsigned long lastMenuAction = 0;
 
-  // Cooldown de 250ms para que cada toque en el menú mueva de a uno exactamente
   if (millis() - lastMenuAction > 250) {
     if (digitalRead(PIN_DIT) == LOW) {
       if (menuOption == 0) {
         if (settings.speedWPM > 5) settings.speedWPM--;
-      } else {
+      } else if (menuOption == 1) {
         settings.iambicModeA = true;
+      } else if (menuOption == 2) {
+        settings.trainerEnabled = false;
       }
       lastMenuAction = millis();
       updateMenuDisplay();
     } else if (digitalRead(PIN_DAH) == LOW) {
       if (menuOption == 0) {
         if (settings.speedWPM < 50) settings.speedWPM++;
-      } else {
+      } else if (menuOption == 1) {
         settings.iambicModeA = false;
+      } else if (menuOption == 2) {
+        settings.trainerEnabled = true;
       }
       lastMenuAction = millis();
       updateMenuDisplay();
@@ -424,7 +493,7 @@ void processMenu() {
 
   bool btnState = digitalRead(PIN_COMMAND);
   if (lastMenuBtnState == HIGH && btnState == LOW) {
-    delay(30); // Antirrebote de botón
+    delay(30);
     if (digitalRead(PIN_COMMAND) == LOW) {
       unsigned long pressStart = millis();
       while (digitalRead(PIN_COMMAND) == LOW) delay(10);
@@ -432,18 +501,24 @@ void processMenu() {
       
       if (duracion < 800) {
         menuOption++;
-        if (menuOption > 1) {
+        if (menuOption > 2) {
           EEPROM.begin(sizeof(settings) + 50);
           EEPROM.put(50, settings);
           EEPROM.commit();
           EEPROM.end();
           
           inMenu = false;
-          clearBuffer();
-          const char* msg = ">SAVED<";
-          for (const char* p = msg; *p; p++) addCharToBuffer(*p);
-          if (settings.sidetoneEnabled) {
-            tone(PIN_SIDETONE, 1200); delay(100); noTone(PIN_SIDETONE);
+          if (settings.trainerEnabled) {
+            inTrainerMode = true;
+            pickNewTargetChar();
+          } else {
+            inTrainerMode = false;
+            clearBuffer();
+            const char* msg = ">SAVED<";
+            for (const char* p = msg; *p; p++) addCharToBuffer(*p);
+            if (settings.sidetoneEnabled) {
+              tone(PIN_SIDETONE, 1200); delay(100); noTone(PIN_SIDETONE);
+            }
           }
         } else {
           updateMenuDisplay();
@@ -460,11 +535,17 @@ void processCommand() {
     unsigned long pressStart = millis();
     while (digitalRead(PIN_COMMAND) == LOW) delay(10);
     unsigned long duracion = millis() - pressStart;
+    
     if (duracion < 1000) {
-      clearBuffer();
-      if (settings.sidetoneEnabled) { tone(PIN_SIDETONE, 800); delay(80); noTone(PIN_SIDETONE); }
+      if (inTrainerMode) {
+        pickNewTargetChar(); // Salta a otra letra si presionas corto en modo trainer
+      } else {
+        clearBuffer();
+        if (settings.sidetoneEnabled) { tone(PIN_SIDETONE, 800); delay(80); noTone(PIN_SIDETONE); }
+      }
     } else {
       inMenu = true;
+      inTrainerMode = false;
       menuOption = 0;
       updateMenuDisplay();
       if (settings.sidetoneEnabled) { 
@@ -478,15 +559,12 @@ void processCommand() {
 void showSplash() {
   u8g2.firstPage();
   do {
-    // Título principal (Fuente mediana B10)
     u8g2.setFont(u8g2_font_ncenB10_tf);
     u8g2.drawStr(22, 16, "KEYER CW");
 
-    // Subtítulo
     u8g2.setFont(u8g2_font_6x10_tf);
     u8g2.drawStr(34, 31, "by LU2FTI");
 
-    // URL separada en 2 líneas usando una fuente pequeña (5x7)
     u8g2.setFont(u8g2_font_5x7_tf);
     u8g2.drawStr(12, 47, "github.com/nicosistemas");
   } while (u8g2.nextPage());
@@ -504,7 +582,7 @@ void setup() {
   EEPROM.begin(sizeof(settings) + 50);
   EEPROM.get(50, settings);
   if (settings.speedWPM < 5 || settings.speedWPM > 50) {
-    settings = {20, false, false, true, 600};
+    settings = {20, false, false, true, 600, false};
     EEPROM.put(50, settings);
     EEPROM.commit();
   }
@@ -516,10 +594,15 @@ void setup() {
   
   showSplash();
   
-  lastKeyActivityTime = millis();
-  clearBuffer();
-  const char* inicio = ">LU2FTI READY<";
-  for (const char* p = inicio; *p; p++) addCharToBuffer(*p);
+  inTrainerMode = settings.trainerEnabled;
+  if (inTrainerMode) {
+    pickNewTargetChar();
+  } else {
+    lastKeyActivityTime = millis();
+    clearBuffer();
+    const char* inicio = ">LU2FTI READY<";
+    for (const char* p = inicio; *p; p++) addCharToBuffer(*p);
+  }
   
   if (settings.sidetoneEnabled) { tone(PIN_SIDETONE, 600); delay(200); noTone(PIN_SIDETONE); }
 }
@@ -531,6 +614,9 @@ void loop() {
     processKeyer();
     processDecoder();
     processCommand();
+    if (inTrainerMode) {
+      // Mantiene activo el bucle en modo entrenamiento
+    }
   }
   delay(1);
 }
