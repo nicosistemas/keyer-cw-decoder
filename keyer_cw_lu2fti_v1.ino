@@ -1,6 +1,6 @@
 /*
   KEYER IÁMBICO LU2FTI + DECODIFICADOR CW para ESP32-C3 Mini
-  Por defecto: 20 WPM, Modo Iámbico B, con menú ajustado
+  Por defecto: 20 WPM, Modo Iámbico B, con menú ajustado y sin saltos dobles.
 */
 
 #include <Wire.h>
@@ -189,7 +189,7 @@ void updateDisplay() {
       u8g2.drawStr(0, 12 + (line * 12), lineBuffer);
     }
     char statusLine[25];
-    sprintf(statusLine, "%dWPM %s LU2FTI", settings.speedWPM,
+    sprintf(statusLine, "%dWPM %s KEYER LU2FTI", settings.speedWPM,
             settings.iambicModeA ? "IAM-A" : "IAM-B");
     u8g2.setFont(u8g2_font_5x7_tf);
     u8g2.drawStr(0, 58, statusLine);
@@ -380,7 +380,7 @@ void updateMenuDisplay() {
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_ncenB08_tf);
-    u8g2.drawStr(0, 12, "-- MENU LU2FTI --");
+    u8g2.drawStr(0, 12, "-- MENU KEYER --");
     u8g2.setFont(u8g2_font_6x10_tf);
     
     char line1[30], line2[30];
@@ -394,7 +394,7 @@ void updateMenuDisplay() {
     u8g2.drawStr(0, 32, line1);
     u8g2.drawStr(0, 48, line2);
     u8g2.setFont(u8g2_font_5x7_tf);
-    u8g2.drawStr(0, 62, "Punto(-)/Raya(+)|Boton:Sig");
+    u8g2.drawStr(0, 62, "Punto-/Raya+/Boton:Sig");
   } while (u8g2.nextPage());
 }
 
@@ -478,11 +478,17 @@ void processCommand() {
 void showSplash() {
   u8g2.firstPage();
   do {
-    u8g2.setFont(u8g2_font_ncenB14_tf);
-    u8g2.drawStr(12, 28, "CW Trainer");
+    // Título principal (Fuente mediana B10)
+    u8g2.setFont(u8g2_font_ncenB10_tf);
+    u8g2.drawStr(22, 16, "KEYER CW");
+
+    // Subtítulo
     u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(34, 46, "LU2FTI Station");
-    u8g2.drawStr(35, 60, "Keyer & Decoder");
+    u8g2.drawStr(34, 31, "by LU2FTI");
+
+    // URL separada en 2 líneas usando una fuente pequeña (5x7)
+    u8g2.setFont(u8g2_font_5x7_tf);
+    u8g2.drawStr(12, 47, "github.com/nicosistemas");
   } while (u8g2.nextPage());
   delay(3000);
 }
